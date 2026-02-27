@@ -1,6 +1,6 @@
 # Content Validation Service
 
-An Akka-based multi-agent pipeline for validating content through parallel AI agents before routing to downstream systems.
+A multi-agent pipeline for validating content through parallel AI agents before routing to downstream systems.
 
 ## Architecture
 
@@ -132,7 +132,6 @@ sequenceDiagram
 
 ## Ingress Endpoint
 
-**Akka type:** `HttpEndpoint`
 Accepts inbound content submissions and exposes status polling. Delegates to the Orchestrator Workflow.
 
 ```yaml
@@ -204,7 +203,6 @@ paths:
 
 ## Orchestrator Workflow
 
-**Akka type:** `Workflow`
 Statically orchestrates the fixed validation pipeline: fan-out to agents, aggregate, optional human review, route, push.
 
 ### Status Lifecycle
@@ -227,28 +225,25 @@ stateDiagram-v2
     FAILED --> [*]
 ```
 
-### Data Model
+### State
 
-```java
-record State(
-    String contentId,
-    String payload,
-    String language,                   // set after language detection
-    List<ValidationResult> results,    // collected from all agents
-    AggregatedResult aggregatedResult, // set after aggregation
-    ReviewDecision reviewDecision,     // set if HITL step occurred
-    Status status,
-    String routingTarget
-) {}
-
-enum Status { RECEIVED, VALIDATING, AGGREGATING, AWAITING_REVIEW, ROUTING, PUSHING, COMPLETED, FAILED }
+```json
+{
+  "contentId": "string",
+  "payload": "string",
+  "language": "string",
+  "results": [{ "agentId": "string", "passed": "boolean", "issues": ["string"] }],
+  "aggregatedResult": { "overallPassed": "boolean", "confidence": "number", "summary": "string" },
+  "reviewDecision": { "decision": "APPROVE | REJECT | OVERRIDE", "reviewer": "string", "notes": "string" },
+  "status": "RECEIVED | VALIDATING | AGGREGATING | AWAITING_REVIEW | ROUTING | PUSHING | COMPLETED | FAILED",
+  "routingTarget": "string"
+}
 ```
 
 ---
 
 ## Human Review (HITL)
 
-**Akka type:** `HttpEndpoint`
 The workflow pauses at `AWAITING_REVIEW` and exposes an endpoint for a human reviewer to submit a decision. The workflow resumes on receipt.
 
 ```yaml
@@ -286,12 +281,27 @@ Trigger condition (set by Aggregator): `overallPassed == false || confidence < 0
 
 ---
 
+## Guardrails
+
+Two input guardrails applied to all agents before each model request.
+
+| Guardrail        | Category           | Scope                        | Aborts |
+|------------------|--------------------|------------------------------|--------|
+| Prompt Injection | `PROMPT_INJECTION` | all agents, model-request | yes |
+| PII | `PII` | all agents, model-request | yes |
+
+- **Prompt Injection** — similarity-based detection against known injection examples; threshold 0.75
+- **PII** — custom rule-based check; blocks content containing personal identifiers before reaching the LLM
+
+---
+
 ## Language Detection Agent
 
 > *"Detect the language of the provided text. Return the ISO 639-1 language code and a confidence score between 0 and 1."*
 
-```java
-record DetectionResult(String language, double confidence) {}
+```json
+{ "input": { "content": "string" },
+  "output": { "language": "string", "confidence": "number" } }
 ```
 
 ---
@@ -300,9 +310,9 @@ record DetectionResult(String language, double confidence) {}
 
 > *"Validate the text for grammar correctness and language policy compliance. Return whether it passed and a list of issues found."*
 
-```java
-record ValidationRequest(String content, String language) {}
-record ValidationResult(String agentId, boolean passed, List<String> issues) {}
+```json
+{ "input": { "content": "string", "language": "string" },
+  "output": { "agentId": "string", "passed": "boolean", "issues": ["string"] } }
 ```
 
 ---
@@ -311,9 +321,9 @@ record ValidationResult(String agentId, boolean passed, List<String> issues) {}
 
 > *"Classify the call reason from the content and validate it meets localization requirements for the detected language. Return the call reason category and whether it passed."*
 
-```java
-record NLPRequest(String content, String language) {}
-record NLPResult(String callReason, boolean passed, List<String> issues) {}
+```json
+{ "input": { "content": "string", "language": "string" },
+  "output": { "callReason": "string", "passed": "boolean", "issues": ["string"] } }
 ```
 
 ---
@@ -322,9 +332,9 @@ record NLPResult(String callReason, boolean passed, List<String> issues) {}
 
 > *"Check whether required logos are present and compliant with brand guidelines. Return pass/fail and any findings."*
 
-```java
-record LogoRequest(String contentId, String contentUrl) {}
-record LogoResult(boolean passed, List<String> findings) {}
+```json
+{ "input": { "contentId": "string", "contentUrl": "string" },
+  "output": { "passed": "boolean", "findings": ["string"] } }
 ```
 
 ---
@@ -333,9 +343,9 @@ record LogoResult(boolean passed, List<String> findings) {}
 
 > *"Apply enterprise business rules to the content. Return whether all rules passed and list any violations."*
 
-```java
-record EnterpriseRequest(String content, Map<String, String> metadata) {}
-record EnterpriseResult(boolean passed, List<String> violations) {}
+```json
+{ "input": { "content": "string", "metadata": { "key": "value" } },
+  "output": { "passed": "boolean", "violations": ["string"] } }
 ```
 
 ---
@@ -344,9 +354,9 @@ record EnterpriseResult(boolean passed, List<String> violations) {}
 
 > *"Given a list of validation results from multiple agents, produce a consolidated report. Return overall pass/fail, a confidence score, and a brief summary of failures if any."*
 
-```java
-record AggregationRequest(String contentId, List<ValidationResult> results) {}
-record AggregatedResult(boolean overallPassed, double confidence, String summary) {}
+```json
+{ "input": { "contentId": "string", "results": [{ "agentId": "string", "passed": "boolean", "issues": ["string"] }] },
+  "output": { "overallPassed": "boolean", "confidence": "number", "summary": "string" } }
 ```
 
 ---
@@ -355,9 +365,9 @@ record AggregatedResult(boolean overallPassed, double confidence, String summary
 
 > *"Determine the routing destination for the content based on its validation outcome and apply final compliance checks. Return the target platform and compliance status."*
 
-```java
-record RoutingRequest(String contentId, AggregatedResult result, ReviewDecision reviewDecision) {}
-record RoutingDecision(String target, boolean compliant, String reason) {}
+```json
+{ "input": { "contentId": "string", "aggregatedResult": {}, "reviewDecision": {} },
+  "output": { "target": "string", "compliant": "boolean", "reason": "string" } }
 ```
 
 ---
@@ -366,13 +376,9 @@ record RoutingDecision(String target, boolean compliant, String reason) {}
 
 > *"Push the validated content to the specified external platform using the available push tool. Return the platform-assigned confirmation ID and timestamp."*
 
-```java
-record PushRequest(String contentId, String target, String payload) {}
-record PushConfirmation(String platformId, Instant pushedAt) {}
-
-// Tool called by the LLM to perform the actual push
-@FunctionTool(description = "Push content to an external platform. Returns a platform-assigned confirmation ID.")
-private PushConfirmation pushToExternalPlatform(String target, String payload) {
-    // HTTP call to external platform
-}
+```json
+{ "input": { "contentId": "string", "target": "string", "payload": "string" },
+  "output": { "platformId": "string", "pushedAt": "timestamp" } }
 ```
+
+**Tool:** `pushToExternalPlatform(target, payload)` — makes the outbound HTTP call to the external platform; invoked by the LLM when ready to push.
