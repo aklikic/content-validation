@@ -6,7 +6,8 @@ An Akka-based multi-agent pipeline for validating content through parallel AI ag
 
 ```mermaid
 flowchart LR
-    OW[Ingress /\nOrchestrator Workflow]
+    INP([Ingress\nEndpoint])
+    OW[Orchestrator\nWorkflow]
 
     subgraph Validation Agents
         LD[Language Detection\nAgent]
@@ -25,6 +26,8 @@ flowchart LR
         DS[Downstream Systems\nCRM, Analytics, BI, Partners]
     end
 
+    INP -- "POST /content" --> OW
+    INP -- "GET /content/{id}/status" --> OW
     OW --> LD
     OW --> TLV
     OW --> LVA
@@ -54,6 +57,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     actor Client
+    participant INP as Ingress Endpoint
     participant OW as Orchestrator Workflow
     participant LD as Language Detection
     participant LNP as Localized NLP
@@ -69,7 +73,8 @@ sequenceDiagram
         participant DS as Downstream Systems
     end
 
-    Client->>OW: ContentRequest
+    Client->>INP: POST /content
+    INP->>OW: ContentRequest
     OW->>OW: status = VALIDATING
 
     par
@@ -112,12 +117,92 @@ sequenceDiagram
     EPA-->>OW: PushConfirmation
 
     OW->>OW: status = COMPLETED
-    OW-->>Client: PushConfirmation
+    OW-->>INP: PushConfirmation
+    INP-->>Client: 201 Created
+
+    opt status polling
+        Client->>INP: GET /content/{contentId}/status
+        INP->>OW: getState()
+        OW-->>INP: State
+        INP-->>Client: StatusResponse
+    end
 ```
 
 ---
 
-## Ingress / Orchestrator Workflow
+## Ingress Endpoint
+
+**Akka type:** `HttpEndpoint`
+Accepts inbound content submissions and exposes status polling. Delegates to the Orchestrator Workflow.
+
+```yaml
+openapi: 3.0.3
+info:
+  title: Content Validation API
+  version: 1.0.0
+paths:
+  /content:
+    post:
+      summary: Submit content for validation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contentId, payload]
+              properties:
+                contentId:
+                  type: string
+                payload:
+                  type: string
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        '201':
+          description: Accepted, workflow started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contentId:
+                    type: string
+                  status:
+                    type: string
+                    example: RECEIVED
+
+  /content/{contentId}/status:
+    get:
+      summary: Poll validation status
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current workflow status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contentId:
+                    type: string
+                  status:
+                    type: string
+                    enum: [RECEIVED, VALIDATING, AGGREGATING, AWAITING_REVIEW, ROUTING, PUSHING, COMPLETED, FAILED]
+                  routingTarget:
+                    type: string
+```
+
+---
+
+## Orchestrator Workflow
 
 **Akka type:** `Workflow`
 Statically orchestrates the fixed validation pipeline: fan-out to agents, aggregate, optional human review, route, push.
@@ -145,8 +230,6 @@ stateDiagram-v2
 ### Data Model
 
 ```java
-record ContentRequest(String contentId, String payload, Map<String, String> metadata) {}
-
 record State(
     String contentId,
     String payload,
@@ -168,11 +251,35 @@ enum Status { RECEIVED, VALIDATING, AGGREGATING, AWAITING_REVIEW, ROUTING, PUSHI
 **Akka type:** `HttpEndpoint`
 The workflow pauses at `AWAITING_REVIEW` and exposes an endpoint for a human reviewer to submit a decision. The workflow resumes on receipt.
 
-```java
-// POST /reviews/{contentId}/decision
-record ReviewDecision(Decision decision, String reviewer, String notes) {}
-
-enum Decision { APPROVE, REJECT, OVERRIDE }
+```yaml
+paths:
+  /reviews/{contentId}/decision:
+    post:
+      summary: Submit a human review decision
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reviewer]
+              properties:
+                decision:
+                  type: string
+                  enum: [APPROVE, REJECT, OVERRIDE]
+                reviewer:
+                  type: string
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Decision recorded, workflow resumed
 ```
 
 Trigger condition (set by Aggregator): `overallPassed == false || confidence < 0.8`
