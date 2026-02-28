@@ -149,7 +149,7 @@ sequenceDiagram
 
 ## Content API
 
-Accepts inbound content submissions and exposes status polling. Delegates to the Orchestrator Workflow.
+Accepts inbound content submissions, exposes status polling, and streams real-time status notifications per content item. Delegates to the Orchestrator Workflow.
 
 ```yaml
 openapi: 3.0.3
@@ -179,6 +179,12 @@ paths:
       responses:
         '201':
           description: Accepted, workflow started
+          headers:
+            Location:
+              description: URL to poll status
+              schema:
+                type: string
+                example: /content/{contentId}/status
           content:
             application/json:
               schema:
@@ -214,13 +220,34 @@ paths:
                     enum: [RECEIVED, DETECTING, NLP, VALIDATING_TEXT, VALIDATING_LOGO, VALIDATING_ENTERPRISE, AGGREGATING, AWAITING_REVIEW, ROUTING, COMPLETED, FAILED]
                   routingTarget:
                     type: string
+
+  /content/{contentId}/stream:
+    get:
+      summary: Stream real-time status notifications (SSE)
+      description: >
+        Server-Sent Events stream backed by the workflow NotificationPublisher.
+        Emits the new status name on each step transition until the workflow ends.
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream of status strings
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                enum: [NLP, VALIDATING_TEXT, VALIDATING_LOGO, VALIDATING_ENTERPRISE, AGGREGATING, AWAITING_REVIEW, ROUTING, COMPLETED, FAILED]
 ```
 
 ---
 
 ## Review API
 
-Exposes the human review decision endpoint. Delegates to the Orchestrator Workflow.
+Exposes the human review decision endpoint and status streams for reviewer dashboards. Delegates to the Orchestrator Workflow and `ContentStatusView`.
 
 ```yaml
 openapi: 3.0.3
@@ -255,6 +282,83 @@ paths:
       responses:
         '200':
           description: Decision recorded, workflow resumed
+
+  /reviews/status/stream:
+    get:
+      summary: Stream all content status updates (SSE)
+      description: >
+        Server-Sent Events stream of all workflow state changes from ContentStatusView.
+        Useful for general monitoring dashboards.
+      responses:
+        '200':
+          description: SSE stream of StatusEntry objects
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/StatusEntry'
+
+  /reviews/pending/stream:
+    get:
+      summary: Stream content items awaiting human review (SSE)
+      description: >
+        Server-Sent Events stream filtered to status = AWAITING_REVIEW.
+        Emits existing pending items on connect, then pushes new ones as they arrive.
+        Intended for reviewer inbox dashboards.
+      responses:
+        '200':
+          description: SSE stream of StatusEntry objects in AWAITING_REVIEW
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/StatusEntry'
+
+components:
+  schemas:
+    StatusEntry:
+      type: object
+      properties:
+        contentId:
+          type: string
+        payload:
+          type: string
+        language:
+          type: string
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              agentId:
+                type: string
+              passed:
+                type: boolean
+              issues:
+                type: array
+                items:
+                  type: string
+        aggregatedResult:
+          type: object
+          properties:
+            overallPassed:
+              type: boolean
+            confidence:
+              type: number
+            summary:
+              type: string
+        reviewDecision:
+          type: object
+          properties:
+            decision:
+              type: string
+            reviewer:
+              type: string
+            notes:
+              type: string
+        status:
+          type: string
+          enum: [RECEIVED, DETECTING, NLP, VALIDATING_TEXT, VALIDATING_LOGO, VALIDATING_ENTERPRISE, AGGREGATING, AWAITING_REVIEW, ROUTING, COMPLETED, FAILED]
+        routingTarget:
+          type: string
 ```
 
 ---
