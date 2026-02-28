@@ -6,48 +6,77 @@ A multi-agent pipeline for validating content through parallel AI agents before 
 
 ```mermaid
 flowchart LR
-    INP([Ingress\nEndpoint])
+    CLIENT([Client])
     OW[Orchestrator\nWorkflow]
 
-    subgraph Validation Agents
-        LD[Language Detection\nAgent]
-        TLV[Text & Language\nValidation Agent]
-        LNP[Localized NLP /\nCall Reason Agent]
-        LVA[Logo Validation\nAgent]
-        EVA[Enterprise Validation\nAgent]
-    end
+    LD[Language Detection\nAgent]
+    LNP[Localized NLP /\nCall Reason Agent]
+    TLV[Text & Language\nValidation Agent]
+    LVA[Logo Validation\nAgent]
+    EVA[Enterprise Validation\nAgent]
 
     AGG[Validation Results\nAggregator Agent]
-    HITL([Human Review\nEndpoint])
     RCA[Routing & Compliance\nAgent]
-    EPA[External Platform\nPush Agent]
+    PUSH[Content Push]
+    HR([Human\nReviewer])
 
     subgraph ext ["⬚ External — out of scope"]
         DS[Downstream Systems\nCRM, Analytics, BI, Partners]
     end
 
-    INP -- "POST /content" --> OW
-    INP -- "GET /content/{id}/status" --> OW
-    OW --> LD
-    OW --> TLV
-    OW --> LVA
-    OW --> EVA
-    LD --> LNP
-    TLV --> AGG
+    CLIENT --> OW
+    OW -- "1" --> LD
+    OW -- "2" --> LNP
+    OW -- "3" --> TLV
+    OW -- "4" --> LVA
+    OW -- "5" --> EVA
     LNP --> AGG
+    TLV --> AGG
     LVA --> AGG
     EVA --> AGG
-    AGG -- "passed" --> RCA
-    AGG -- "review needed" --> HITL
-    HITL -- "approved / override" --> RCA
-    HITL -- "rejected" --> FAILED([FAILED])
-    RCA --> EPA
-    EPA --> TOOL[["tool\npushToExternalPlatform"]]
-    TOOL --> DS
+    AGG -- "6 · passed" --> RCA
+    AGG -- "review needed" --> HR
+    OW -- "failure" --> HR
+    HR -- "approved / override" --> OW
+    HR -- "rejected" --> FAILED([FAILED])
+    RCA -- "7" --> OW
+    OW -- "8" --> PUSH --> DS
+
+    subgraph legend [Legend]
+        direction TB
+        L1(("·")) -- "main flow" --> L2(("·"))
+        L3(("·")) -- "validation pipeline" --> L4(("·"))
+        L5(("·")) -- "review / HITL" --> L6(("·"))
+        L7(("·")) -- "rejection" --> L8(("·"))
+    end
+
+    %% main flow — blue
+    linkStyle 0,10,15,16,17 stroke:#2563eb,stroke-width:2px
+    %% validation pipeline — green
+    linkStyle 1,2,3,4,5,6,7,8,9 stroke:#16a34a,stroke-width:2px
+    %% review / HITL — amber
+    linkStyle 11,12,13 stroke:#d97706,stroke-width:2px
+    %% rejection — red
+    linkStyle 14 stroke:#dc2626,stroke-width:2px
+    %% legend links
+    linkStyle 18 stroke:#2563eb,stroke-width:2px
+    linkStyle 19 stroke:#16a34a,stroke-width:2px
+    linkStyle 20 stroke:#d97706,stroke-width:2px
+    linkStyle 21 stroke:#dc2626,stroke-width:2px
+
+    style L1 fill:#fff,stroke:#ccc,color:#fff
+    style L2 fill:#fff,stroke:#ccc,color:#fff
+    style L3 fill:#fff,stroke:#ccc,color:#fff
+    style L4 fill:#fff,stroke:#ccc,color:#fff
+    style L5 fill:#fff,stroke:#ccc,color:#fff
+    style L6 fill:#fff,stroke:#ccc,color:#fff
+    style L7 fill:#fff,stroke:#ccc,color:#fff
+    style L8 fill:#fff,stroke:#ccc,color:#fff
+    style legend fill:#fafafa,stroke:#ccc
 
     style ext fill:#f0f0f0,stroke:#aaa,stroke-dasharray:6,color:#888
     style DS fill:#e8e8e8,stroke:#aaa,color:#888
-    style TOOL fill:#fff8e1,stroke:#f59e0b,color:#92400e
+    style FAILED fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
 ```
 
 ---
@@ -57,7 +86,6 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     actor Client
-    participant INP as Ingress Endpoint
     participant OW as Orchestrator Workflow
     participant LD as Language Detection
     participant LNP as Localized NLP
@@ -65,79 +93,68 @@ sequenceDiagram
     participant LVA as Logo Validation
     participant EVA as Enterprise Validation
     participant AGG as Aggregator
-    participant HR as Human Review Endpoint
     actor Reviewer
     participant RCA as Routing & Compliance
-    participant EPA as External Platform Push
+    participant PUSH as Content Push
     box rgba(200,200,200,0.2) External — out of scope
         participant DS as Downstream Systems
     end
 
-    Client->>INP: POST /content
-    INP->>OW: ContentRequest
-    OW->>OW: status = VALIDATING
+    rect rgb(219, 234, 254)
+        Client->>OW: submit content
+        OW->>OW: status = VALIDATING
+    end
 
-    par
+    rect rgb(220, 252, 231)
         OW->>LD: content
         LD-->>OW: DetectionResult
         OW->>LNP: content + language
         LNP-->>OW: NLPResult
-    and
         OW->>TLV: ValidationRequest
         TLV-->>OW: ValidationResult
-    and
         OW->>LVA: LogoRequest
         LVA-->>OW: LogoResult
-    and
         OW->>EVA: EnterpriseRequest
         EVA-->>OW: EnterpriseResult
+        OW->>OW: status = AGGREGATING
+        OW->>AGG: AggregationRequest
+        AGG-->>OW: AggregatedResult
     end
 
-    OW->>OW: status = AGGREGATING
-    OW->>AGG: AggregationRequest
-    AGG-->>OW: AggregatedResult
-
-    alt review needed (failed or confidence < 0.8)
-        OW->>OW: status = AWAITING_REVIEW
-        Reviewer->>HR: POST /reviews/{contentId}/decision
-        HR->>OW: ReviewDecision
+    rect rgb(254, 243, 199)
+        alt review needed: low confidence or failure
+            OW->>OW: status = AWAITING_REVIEW
+            Reviewer->>OW: submit decision
+            alt rejected
+                OW->>OW: status = FAILED
+            end
+        end
     end
 
-    OW->>OW: status = ROUTING
-    OW->>RCA: RoutingRequest
-    RCA-->>OW: RoutingDecision
+    rect rgb(219, 234, 254)
+        OW->>OW: status = ROUTING
+        OW->>RCA: RoutingRequest
+        RCA-->>OW: RoutingDecision
+        OW->>OW: status = COMPLETED
+        OW-->>Client: Done
+    end
 
-    OW->>OW: status = PUSHING
-    OW->>EPA: PushRequest
-    activate EPA
-    Note over EPA: LLM decides to invoke tool
-    EPA->>+DS: tool pushToExternalPlatform(target, payload)
-    DS-->>-EPA: platformId + timestamp
-    deactivate EPA
-    EPA-->>OW: PushConfirmation
-
-    OW->>OW: status = COMPLETED
-    OW-->>INP: PushConfirmation
-    INP-->>Client: 201 Created
-
-    opt status polling
-        Client->>INP: GET /content/{contentId}/status
-        INP->>OW: getState()
-        OW-->>INP: State
-        INP-->>Client: StatusResponse
+    rect rgb(219, 234, 254)
+        OW->>PUSH: PushRequest
+        PUSH->>DS: push to downstream
     end
 ```
 
 ---
 
-## Ingress Endpoint
+## Content API
 
 Accepts inbound content submissions and exposes status polling. Delegates to the Orchestrator Workflow.
 
 ```yaml
 openapi: 3.0.3
 info:
-  title: Content Validation API
+  title: Content API
   version: 1.0.0
 paths:
   /content:
@@ -194,59 +211,22 @@ paths:
                     type: string
                   status:
                     type: string
-                    enum: [RECEIVED, VALIDATING, AGGREGATING, AWAITING_REVIEW, ROUTING, PUSHING, COMPLETED, FAILED]
+                    enum: [RECEIVED, DETECTING, NLP, VALIDATING_TEXT, VALIDATING_LOGO, VALIDATING_ENTERPRISE, AGGREGATING, AWAITING_REVIEW, ROUTING, COMPLETED, FAILED]
                   routingTarget:
                     type: string
 ```
 
 ---
 
-## Orchestrator Workflow
+## Review API
 
-Statically orchestrates the fixed validation pipeline: fan-out to agents, aggregate, optional human review, route, push.
-
-### Status Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> RECEIVED
-    RECEIVED --> VALIDATING
-    VALIDATING --> AGGREGATING
-    AGGREGATING --> ROUTING : passed
-    AGGREGATING --> AWAITING_REVIEW : review needed
-    AWAITING_REVIEW --> ROUTING : approved / override
-    AWAITING_REVIEW --> FAILED : rejected
-    ROUTING --> PUSHING
-    PUSHING --> COMPLETED
-    VALIDATING --> FAILED
-    ROUTING --> FAILED
-    PUSHING --> FAILED
-    COMPLETED --> [*]
-    FAILED --> [*]
-```
-
-### State
-
-```json
-{
-  "contentId": "string",
-  "payload": "string",
-  "language": "string",
-  "results": [{ "agentId": "string", "passed": "boolean", "issues": ["string"] }],
-  "aggregatedResult": { "overallPassed": "boolean", "confidence": "number", "summary": "string" },
-  "reviewDecision": { "decision": "APPROVE | REJECT | OVERRIDE", "reviewer": "string", "notes": "string" },
-  "status": "RECEIVED | VALIDATING | AGGREGATING | AWAITING_REVIEW | ROUTING | PUSHING | COMPLETED | FAILED",
-  "routingTarget": "string"
-}
-```
-
----
-
-## Human Review (HITL)
-
-The workflow pauses at `AWAITING_REVIEW` and exposes an endpoint for a human reviewer to submit a decision. The workflow resumes on receipt.
+Exposes the human review decision endpoint. Delegates to the Orchestrator Workflow.
 
 ```yaml
+openapi: 3.0.3
+info:
+  title: Review API
+  version: 1.0.0
 paths:
   /reviews/{contentId}/decision:
     post:
@@ -277,7 +257,81 @@ paths:
           description: Decision recorded, workflow resumed
 ```
 
-Trigger condition (set by Aggregator): `overallPassed == false || confidence < 0.8`
+---
+
+## Orchestrator Workflow
+
+Sequentially validates content through agents, aggregates results, optionally pauses for human review (triggered by low confidence or failure), then routes. On completion, a Consumer asynchronously publishes to the `content-push` topic.
+
+### Status Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> RECEIVED
+    RECEIVED --> DETECTING
+    DETECTING --> NLP
+    NLP --> VALIDATING_TEXT
+    VALIDATING_TEXT --> VALIDATING_LOGO
+    VALIDATING_LOGO --> VALIDATING_ENTERPRISE
+    VALIDATING_ENTERPRISE --> AGGREGATING
+    AGGREGATING --> ROUTING : passed
+    AGGREGATING --> AWAITING_REVIEW : review needed
+    DETECTING --> AWAITING_REVIEW : failure
+    NLP --> AWAITING_REVIEW : failure
+    VALIDATING_TEXT --> AWAITING_REVIEW : failure
+    VALIDATING_LOGO --> AWAITING_REVIEW : failure
+    VALIDATING_ENTERPRISE --> AWAITING_REVIEW : failure
+    ROUTING --> AWAITING_REVIEW : failure
+    AWAITING_REVIEW --> ROUTING : approved / override
+    AWAITING_REVIEW --> FAILED : rejected
+    ROUTING --> COMPLETED
+    COMPLETED --> [*]
+    FAILED --> [*]
+
+    classDef main fill:#dbeafe,stroke:#2563eb,color:#1e3a5f
+    classDef review fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef failed fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+
+    class RECEIVED,DETECTING,NLP,VALIDATING_TEXT,VALIDATING_LOGO,VALIDATING_ENTERPRISE,AGGREGATING,ROUTING,COMPLETED main
+    class AWAITING_REVIEW review
+    class FAILED failed
+```
+
+### State
+
+```json
+{
+  "contentId": "string",
+  "payload": "string",
+  "language": "string",
+  "results": [{ "agentId": "string", "passed": "boolean", "issues": ["string"] }],
+  "aggregatedResult": { "overallPassed": "boolean", "confidence": "number", "summary": "string" },
+  "reviewDecision": { "decision": "APPROVE | REJECT | OVERRIDE", "reviewer": "string", "notes": "string" },
+  "status": "RECEIVED | DETECTING | NLP | VALIDATING_TEXT | VALIDATING_LOGO | VALIDATING_ENTERPRISE | AGGREGATING | AWAITING_REVIEW | ROUTING | COMPLETED | FAILED",
+  "routingTarget": "string"
+}
+```
+
+---
+
+## Human Review (HITL)
+
+When the workflow cannot proceed automatically it pauses at `AWAITING_REVIEW` and waits for a human decision submitted via the Review API.
+
+**Trigger conditions**
+
+| Trigger | Condition |
+|---|---|
+| Low confidence | Aggregator returns `overallPassed == false` or `confidence < 0.8` |
+| Step failure | Any validation step exhausts retries |
+
+**Outcomes**
+
+| Decision | Result |
+|---|---|
+| `APPROVE` | Workflow resumes at routing |
+| `OVERRIDE` | Workflow resumes at routing, bypassing failed checks |
+| `REJECT` | Workflow ends with `FAILED` |
 
 ---
 
@@ -285,8 +339,8 @@ Trigger condition (set by Aggregator): `overallPassed == false || confidence < 0
 
 Two input guardrails applied to all agents before each model request.
 
-| Guardrail        | Category           | Scope                        | Aborts |
-|------------------|--------------------|------------------------------|--------|
+| Guardrail | Category | Scope | Aborts |
+|---|---|---|---|
 | Prompt Injection | `PROMPT_INJECTION` | all agents, model-request | yes |
 | PII | `PII` | all agents, model-request | yes |
 
@@ -306,17 +360,6 @@ Two input guardrails applied to all agents before each model request.
 
 ---
 
-## Text & Language Validation Agent
-
-> *"Validate the text for grammar correctness and language policy compliance. Return whether it passed and a list of issues found."*
-
-```json
-{ "input": { "content": "string", "language": "string" },
-  "output": { "agentId": "string", "passed": "boolean", "issues": ["string"] } }
-```
-
----
-
 ## Localized NLP / Call Reason Agent
 
 > *"Classify the call reason from the content and validate it meets localization requirements for the detected language. Return the call reason category and whether it passed."*
@@ -324,6 +367,17 @@ Two input guardrails applied to all agents before each model request.
 ```json
 { "input": { "content": "string", "language": "string" },
   "output": { "callReason": "string", "passed": "boolean", "issues": ["string"] } }
+```
+
+---
+
+## Text & Language Validation Agent
+
+> *"Validate the text for grammar correctness and language policy compliance. Return whether it passed and a list of issues found."*
+
+```json
+{ "input": { "content": "string", "language": "string" },
+  "output": { "agentId": "string", "passed": "boolean", "issues": ["string"] } }
 ```
 
 ---
@@ -369,16 +423,3 @@ Two input guardrails applied to all agents before each model request.
 { "input": { "contentId": "string", "aggregatedResult": {}, "reviewDecision": {} },
   "output": { "target": "string", "compliant": "boolean", "reason": "string" } }
 ```
-
----
-
-## External Platform Push Agent
-
-> *"Push the validated content to the specified external platform using the available push tool. Return the platform-assigned confirmation ID and timestamp."*
-
-```json
-{ "input": { "contentId": "string", "target": "string", "payload": "string" },
-  "output": { "platformId": "string", "pushedAt": "timestamp" } }
-```
-
-**Tool:** `pushToExternalPlatform(target, payload)` — makes the outbound HTTP call to the external platform; invoked by the LLM when ready to push.
