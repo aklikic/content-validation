@@ -20,7 +20,8 @@ public class ContentStatusView extends View {
       AggregatedResult aggregatedResult,
       ReviewDecision reviewDecision,
       String status,
-      String routingTarget) {}
+      String routingTarget,
+      String failureReason) {}
 
   public record StatusEntries(List<StatusEntry> entries) {}
 
@@ -36,7 +37,8 @@ public class ContentStatusView extends View {
           state.aggregatedResult(),
           state.reviewDecision(),
           state.status().name(),
-          state.routingTarget() != null ? state.routingTarget() : ""));
+          state.routingTarget() != null ? state.routingTarget() : "",
+          state.failureReason() != null ? state.failureReason() : ""));
     }
   }
 
@@ -52,6 +54,11 @@ public class ContentStatusView extends View {
 
   @Query(value = "SELECT * FROM content_status WHERE status = 'AWAITING_REVIEW'", streamUpdates = true)
   public QueryStreamEffect<StatusEntry> streamPendingReviews() {
+    return queryStreamResult();
+  }
+
+  @Query(value = "SELECT * FROM content_status WHERE status = 'FAILED'", streamUpdates = true)
+  public QueryStreamEffect<StatusEntry> streamFailedItems() {
     return queryStreamResult();
   }
 }

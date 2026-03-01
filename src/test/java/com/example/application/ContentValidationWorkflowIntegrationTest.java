@@ -42,6 +42,7 @@ public class ContentValidationWorkflowIntegrationTest extends TestKitSupport {
     return TestKit.Settings.DEFAULT
         .withAdditionalConfig("akka.javasdk.agent.openai.api-key = n/a")
         .withTopicOutgoingMessages("content-push")
+        .withAllComponentsEnabled()
         .withModelProvider(LanguageDetectionAgent.class, languageModel)
         .withModelProvider(LocalizedNLPAgent.class, nlpModel)
         .withModelProvider(TextLanguageValidationAgent.class, textModel)
@@ -111,10 +112,10 @@ public class ContentValidationWorkflowIntegrationTest extends TestKitSupport {
     assertThat(entry.aggregatedResult().summary()).isEqualTo("All checks passed");
     assertThat(entry.results()).hasSize(4);
 
-    var pushed = contentPushTopic.expectOneTyped(PushRequest.class, ofSeconds(5));
-    assertThat(pushed.getPayload().contentId()).isEqualTo(contentId);
-    assertThat(pushed.getPayload().target()).isEqualTo("channel-a");
-    assertThat(pushed.getPayload().payload()).isEqualTo("Hello world content");
+     var pushed = contentPushTopic.expectOneTyped(PushRequest.class, ofSeconds(5));
+     assertThat(pushed.getPayload().contentId()).isEqualTo(contentId);
+     assertThat(pushed.getPayload().target()).isEqualTo("channel-a");
+     assertThat(pushed.getPayload().payload()).isEqualTo("Hello world content");
   }
 
   @Test
@@ -145,7 +146,7 @@ public class ContentValidationWorkflowIntegrationTest extends TestKitSupport {
     assertThat(pendingEntry.aggregatedResult().summary()).isEqualTo("Low confidence, needs human review");
     assertThat(pendingEntry.reviewDecision()).isNull();
 
-    var review = new ReviewDecision("approve", "reviewer-1", "Looks good after manual check");
+    var review = new ReviewDecision(ReviewDecisionType.APPROVE, "reviewer-1", "Looks good after manual check");
     componentClient.forWorkflow(contentId)
         .method(ContentValidationWorkflow::submitReview)
         .invoke(review);
@@ -163,12 +164,12 @@ public class ContentValidationWorkflowIntegrationTest extends TestKitSupport {
 
     var completedEntry = awaitViewEntry(contentId, "COMPLETED");
     assertThat(completedEntry.routingTarget()).isEqualTo("channel-a");
-    assertThat(completedEntry.reviewDecision().decision()).isEqualTo("approve");
+    assertThat(completedEntry.reviewDecision().decision()).isEqualTo(ReviewDecisionType.APPROVE);
     assertThat(completedEntry.reviewDecision().reviewer()).isEqualTo("reviewer-1");
 
-    var pushed = contentPushTopic.expectOneTyped(PushRequest.class, ofSeconds(5));
-    assertThat(pushed.getPayload().contentId()).isEqualTo(contentId);
-    assertThat(pushed.getPayload().target()).isEqualTo("channel-a");
-    assertThat(pushed.getPayload().payload()).isEqualTo("Uncertain content");
+     var pushed = contentPushTopic.expectOneTyped(PushRequest.class, ofSeconds(5));
+     assertThat(pushed.getPayload().contentId()).isEqualTo(contentId);
+     assertThat(pushed.getPayload().target()).isEqualTo("channel-a");
+     assertThat(pushed.getPayload().payload()).isEqualTo("Uncertain content");
   }
 }

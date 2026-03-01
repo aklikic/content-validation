@@ -46,4 +46,13 @@ public class ReviewEndpoint {
         .entriesSource();
     return HttpResponses.serverSentEventsForView(source);
   }
+
+  @Get("/failed/stream")
+  public HttpResponse streamFailedItems() {
+    var source = componentClient
+        .forView()
+        .stream(ContentStatusView::streamFailedItems)
+        .entriesSource();
+    return HttpResponses.serverSentEventsForView(source);
+  }
 }

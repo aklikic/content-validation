@@ -8,7 +8,9 @@ import akka.javasdk.annotations.http.Post;
 import akka.javasdk.client.ComponentClient;
 import akka.javasdk.http.HttpResponses;
 import com.example.application.ContentValidationWorkflow;
+import com.example.domain.AggregatedResult;
 import com.example.domain.ContentRequest;
+import com.example.domain.ReviewDecision;
 
 @HttpEndpoint("/content")
 @Acl(allow = @Acl.Matcher(principal = Acl.Principal.ALL))
@@ -16,7 +18,14 @@ public class ContentEndpoint {
 
   public record SubmitResponse(String contentId, String status) {}
 
-  public record StatusResponse(String contentId, String status, String routingTarget) {}
+  public record StatusResponse(
+      String contentId,
+      String status,
+      String routingTarget,
+      String language,
+      AggregatedResult aggregatedResult,
+      ReviewDecision reviewDecision,
+      String failureReason) {}
 
   private final ComponentClient componentClient;
 
@@ -39,7 +48,14 @@ public class ContentEndpoint {
     var status = componentClient.forWorkflow(contentId)
         .method(ContentValidationWorkflow::getStatus)
         .invoke();
-    return new StatusResponse(status.contentId(), status.status().name(), status.routingTarget());
+    return new StatusResponse(
+        status.contentId(),
+        status.status().name(),
+        status.routingTarget(),
+        status.language(),
+        status.aggregatedResult(),
+        status.reviewDecision(),
+        status.failureReason());
   }
 
   @Get("/{contentId}/stream")

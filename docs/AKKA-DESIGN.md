@@ -59,7 +59,7 @@ com.example.contentvalidation/
 flowchart TD
     CE[ContentEndpoint] -- start / getStatus / stream --> CWF
     RE[ReviewEndpoint] -- submitReview --> CWF
-    RE -- "stream all status" --> CSV[ContentStatusView]
+    RE -- "stream all / pending / failed" --> CSV[ContentStatusView]
     CWF -. "workflow state" .-> CSV
 
     CWF[ContentValidationWorkflow] -- "1: detectLanguage" --> LDA
@@ -124,29 +124,41 @@ flowchart LR
     aggregate -- "review needed" --> pause([awaiting\nreview])
     pause -- "submitReview" --> route
     route --> E([end / COMPLETED])
-    detectLanguage -- error --> fail
-    validateNLP -- error --> fail
-    validateText -- error --> fail
-    validateLogo -- error --> fail
-    validateEnterprise -- error --> fail
-    route -- error --> fail
+    detectLanguage -- "error\n(maxRetries)" --> fail
+    validateNLP -- "error\n(maxRetries)" --> fail
+    validateText -- "error\n(maxRetries)" --> fail
+    validateLogo -- "error\n(maxRetries)" --> fail
+    validateEnterprise -- "error\n(maxRetries)" --> fail
+    route -- "error\n(maxRetries)" --> fail
     fail --> pauseF([awaiting\nreview / HITL])
-    pauseF -- "submitReview\napprove/override" --> route
-    pauseF -- "submitReview\nreject" --> F([end / FAILED])
+    pauseF -- "submitReview\nAPPROVE/OVERRIDE" --> route
+    pauseF -- "submitReview\nREJECT" --> F([end / FAILED])
+    detectLanguage -- "guardrail" --> F
+    validateNLP -- "guardrail" --> F
+    validateText -- "guardrail" --> F
+    validateLogo -- "guardrail" --> F
+    validateEnterprise -- "guardrail" --> F
+    aggregate -- "guardrail" --> F
+    route -- "guardrail" --> F
+
+    style F fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
 ```
 
-| Step                 | Sets Status             | Publishes Notification  | Calls                          | Timeout |
-|----------------------|-------------------------|-------------------------|--------------------------------|---------|
-| `detectLanguage`     | `DETECTING`             | `NLP`                   | `LanguageDetectionAgent`       | 60s     |
-| `validateNLP`        | `NLP`                   | `VALIDATING_TEXT`       | `LocalizedNLPAgent`            | 60s     |
-| `validateText`       | `VALIDATING_TEXT`       | `VALIDATING_LOGO`       | `TextLanguageValidationAgent`  | 60s     |
-| `validateLogo`       | `VALIDATING_LOGO`       | `VALIDATING_ENTERPRISE` | `LogoValidationAgent`          | 60s     |
-| `validateEnterprise` | `VALIDATING_ENTERPRISE` | `AGGREGATING`           | `EnterpriseValidationAgent`    | 60s     |
-| `aggregate`          | `AGGREGATING`           | `AWAITING_REVIEW` / `ROUTING` | `ValidationAggregatorAgent` | 60s  |
-| `route`              | `COMPLETED`             | `COMPLETED`             | `RoutingComplianceAgent`       | 60s     |
-| `fail`               | `AWAITING_REVIEW`       | `FAILED`                | —                              | —       |
+| Step                 | Sets Status             | Publishes Notification        | Calls                          | Timeout |
+|----------------------|-------------------------|-------------------------------|--------------------------------|---------|
+| `detectLanguage`     | `DETECTING`             | `NLP`                         | `LanguageDetectionAgent`       | 60s     |
+| `validateNLP`        | `NLP`                   | `VALIDATING_TEXT`             | `LocalizedNLPAgent`            | 60s     |
+| `validateText`       | `VALIDATING_TEXT`       | `VALIDATING_LOGO`             | `TextLanguageValidationAgent`  | 60s     |
+| `validateLogo`       | `VALIDATING_LOGO`       | `VALIDATING_ENTERPRISE`       | `LogoValidationAgent`          | 60s     |
+| `validateEnterprise` | `VALIDATING_ENTERPRISE` | `AGGREGATING`                 | `EnterpriseValidationAgent`    | 60s     |
+| `aggregate`          | `AGGREGATING`           | `AWAITING_REVIEW` / `ROUTING` | `ValidationAggregatorAgent`    | 60s     |
+| `route`              | `COMPLETED`             | `COMPLETED`                   | `RoutingComplianceAgent`       | 60s     |
+| `fail`               | `AWAITING_REVIEW`       | `FAILED`                      | —                              | —       |
 
-Recovery: `maxRetries(2)` → `failStep` on all steps. `failStep` pauses for HITL; approve/override resumes at `route`, reject ends with `FAILED`.
+**Recovery — two failure paths:**
+
+- **Guardrail block** (PII, Prompt Injection): caught in-step, no retries. Immediately transitions to `FAILED` with `failureReason` set from the guardrail message. Bypasses HITL.
+- **Step error**: `maxRetries(2)` → `failStep` → pauses at `AWAITING_REVIEW` for HITL. `APPROVE`/`OVERRIDE` resumes at `route`; `REJECT` ends with `FAILED` and `failureReason` set to `"Rejected by reviewer: {reviewer}"`.
 
 ---
 
