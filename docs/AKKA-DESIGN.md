@@ -20,7 +20,6 @@ Akka SDK component architecture for the [Content Validation Service](SPEC.md).
 | Routing & Compliance Agent | `Agent` | `RoutingComplianceAgent` | `application.agents` |
 | Content Push Consumer | `Consumer` | `ContentPushConsumer` | `application` |
 | Content Status View | `View` | `ContentStatusView` | `application` |
-| PII Guardrail | `TextGuardrail` | `PiiGuard` | `application.guardrail` |
 
 ---
 
@@ -44,7 +43,7 @@ com.example.contentvalidation/
       ValidationAggregatorAgent
       RoutingComplianceAgent
     guardrail/
-      PiiGuard
+      PiiGuard          ← TextGuardrail implementation (not an Akka component — wired via application.conf)
   domain/
     ValidationResult
     AggregatedResult
@@ -153,30 +152,59 @@ flowchart LR
 | `validateEnterprise` | `VALIDATING_ENTERPRISE` | `AGGREGATING`                 | `EnterpriseValidationAgent`    | 60s     |
 | `aggregate`          | `AGGREGATING`           | `AWAITING_REVIEW` / `ROUTING` | `ValidationAggregatorAgent`    | 60s     |
 | `route`              | `COMPLETED`             | `COMPLETED`                   | `RoutingComplianceAgent`       | 60s     |
-| `fail`               | `AWAITING_REVIEW`       | `FAILED`                      | —                              | —       |
+| `fail`               | `AWAITING_REVIEW`       | `AWAITING_REVIEW`             | —                              | —       |
 
 **Recovery — two failure paths:**
 
-- **Guardrail block** (PII, Prompt Injection): caught in-step, no retries. Immediately transitions to `FAILED` with `failureReason` set from the guardrail message. Bypasses HITL.
-- **Step error**: `maxRetries(2)` → `failStep` → pauses at `AWAITING_REVIEW` for HITL. `APPROVE`/`OVERRIDE` resumes at `route`; `REJECT` ends with `FAILED` and `failureReason` set to `"Rejected by reviewer: {reviewer}"`.
+- **Guardrail block** (PII, Prompt Injection): caught in-step, no retries. Immediately transitions to `FAILED` with `failureReason` set from the guardrail message. Publishes `FAILED` notification. Bypasses HITL.
+- **Step error**: `maxRetries(2)` → `failStep` → pauses at `AWAITING_REVIEW` for HITL. Publishes `AWAITING_REVIEW` notification. `APPROVE`/`OVERRIDE` resumes at `route`; `REJECT` ends with `FAILED` and `failureReason` set to `"Rejected by reviewer: {reviewer}"`. Publishes `FAILED` notification on REJECT.
 
 ---
 
-## Agent Roles & Guardrails
+## Agent Roles
 
-Agents are grouped by `@AgentRole`. Guardrails are scoped to roles via config.
+Agents are annotated with `@AgentRole`. Roles are used to scope guardrail configuration.
 
-| Agent                          | Role          | Guardrails Applied      |
-|--------------------------------|---------------|-------------------------|
-| `LanguageDetectionAgent`       | `validator`   | Prompt Injection, PII   |
-| `LocalizedNLPAgent`            | `validator`   | Prompt Injection, PII   |
-| `TextLanguageValidationAgent`  | `validator`   | Prompt Injection, PII   |
-| `LogoValidationAgent`          | `validator`   | Prompt Injection, PII   |
-| `EnterpriseValidationAgent`    | `validator`   | Prompt Injection, PII   |
-| `ValidationAggregatorAgent`    | `aggregator`  | Prompt Injection, PII   |
-| `RoutingComplianceAgent`       | `router`      | Prompt Injection, PII   |
+| Agent                          | Role          |
+|--------------------------------|---------------|
+| `LanguageDetectionAgent`       | `validator`   |
+| `LocalizedNLPAgent`            | `validator`   |
+| `TextLanguageValidationAgent`  | `validator`   |
+| `LogoValidationAgent`          | `validator`   |
+| `EnterpriseValidationAgent`    | `validator`   |
+| `ValidationAggregatorAgent`    | `aggregator`  |
+| `RoutingComplianceAgent`       | `router`      |
 
-Guardrails apply to `model-request` for all roles (`agent-roles = ["*"]`), hard-blocking (`report-only = false`).
+---
+
+## Guardrail Configuration
+
+Guardrails are **not** Akka components. They are plain Java classes implementing `TextGuardrail` (or the built-in `SimilarityGuard`) registered in `application.conf`. They require no `@Component` annotation.
+
+```conf
+akka.javasdk.agent.guardrails {
+
+  "prompt injection guard" {
+    class = "akka.javasdk.agent.SimilarityGuard"   # built-in — no custom class needed
+    agent-roles = ["*"]
+    category = PROMPT_INJECTION
+    use-for = ["model-request"]
+    report-only = false
+    threshold = 0.75
+    bad-examples-resource-dir = "guardrail/jailbreak"
+  }
+
+  "pii guard" {
+    class = "com.example.contentvalidation.application.guardrail.PiiGuard"
+    agent-roles = ["*"]
+    category = PII
+    use-for = ["model-request"]
+    report-only = false
+  }
+}
+```
+
+Both guardrails apply to `model-request` for all agent roles (`agent-roles = ["*"]`), hard-blocking (`report-only = false`).
 
 ---
 
