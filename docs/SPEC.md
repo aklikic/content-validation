@@ -1,6 +1,14 @@
 # Content Validation Service
 
-A multi-agent pipeline for validating content through parallel AI agents before routing to downstream systems.
+A multi-agent pipeline for validating content through AI agents with HITL and routing to downstream systems.
+
+- **Content submission** — clients POST content with a unique ID; an Orchestrator Workflow is started immediately and the caller receives a status URL to poll or stream.
+- **Sequential validation pipeline** — the workflow drives content through five specialist agents in order: Language Detection → Localized NLP → Text & Language Validation → Logo Validation → Enterprise Validation.
+- **Aggregation** — a Validation Results Aggregator Agent consolidates all agent outputs into a single pass/fail verdict and a confidence score (0–1).
+- **Human-in-the-loop (HITL)** — when confidence drops below 80% or any agent fails, the workflow pauses at `AWAITING_REVIEW`; a reviewer submits `APPROVE`, `REJECT`, or `OVERRIDE` to resume or terminate the workflow.
+- **Guardrails** — Prompt Injection and PII guardrails are applied before every model call; a guardrail hit terminates the workflow immediately with `FAILED`, bypassing HITL entirely.
+- **Routing** — a Routing & Compliance Agent determines the downstream target; on success the workflow ends at `COMPLETED` and a Consumer asynchronously pushes the content to the `content-push` topic.
+- **Real-time status streaming** — per-item Server-Sent Events streams expose live workflow transitions; a separate SSE feed on the Review API powers reviewer inbox and monitoring dashboards.
 
 ## Architecture
 
